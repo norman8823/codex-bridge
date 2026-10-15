@@ -1,161 +1,159 @@
 # Codex bridge
 
-A standalone, outbound-only GitHub Issues listener for an **existing local Codex CLI session**.
-Python standard library, `gh`, and `codex` are the only dependencies. No API keys, web server,
-cloud agent, daemon, or application changes. Installed at `/Users/norman/codex-bridge`.
+Standalone private GitHub Issues → **existing local interactive Codex CLI session**.
+Python standard library, `gh`, and `codex queue`; no cloud agent, API key, hooks, or application integration.
+One installation on one Mac. Normal Codex execution permissions still apply.
 
-## Start and operate
+## Install and operate
 
-Run this in a dedicated Terminal window (keep your interactive Codex terminal open):
+From your normal authenticated macOS terminal:
 
 ```sh
-~/codex-bridge/codex-bridge start
+cd ~/codex-bridge
+# On a new installation only: copy config.example.json to config.json and configure it.
+gh auth status
+./codex-bridge install
+./codex-bridge status
 ```
 
-Or double-click `Start Bridge.command` to open a dedicated Terminal window.
-The listener stays in the foreground, polls every 15 seconds, and stops with Ctrl-C.
-From another terminal:
+`install` checks the existing private relay, adds missing bridge labels, and installs/starts
+`~/Library/LaunchAgents/com.norman.codex-bridge.plist`. Existing config and receipts are preserved.
+GitHub authentication uses `gh`'s normal configuration/macOS Keychain. The plist records executable
+paths and configuration directories, never tokens. Authenticate normally with `gh auth login` if needed.
 
 ```sh
+~/codex-bridge/codex-bridge start     # enable/start; also re-enables login startup
+~/codex-bridge/codex-bridge stop      # disable across logins and unload; stays stopped
+~/codex-bridge/codex-bridge restart
 ~/codex-bridge/codex-bridge status
-~/codex-bridge/codex-bridge activity
-~/codex-bridge/codex-bridge stop
+~/codex-bridge/codex-bridge routes
+~/codex-bridge/codex-bridge logs
+~/codex-bridge/codex-bridge activity  # includes durable delivery receipts
+~/codex-bridge/codex-bridge uninstall
 ```
 
-Stop finishes an active submission before exiting. Wait for `status` to say Stopped before
-changing configuration. To target a different existing session:
+Launchd starts the service at login and restarts it after exit, with a 10-second throttle.
+No Terminal window is needed. OS file locks prevent duplicate listeners for this installation and
+concurrent submissions to the same session across installations. Explicit stop disables the service
+before unloading it. Shutdown lets the current queue call persist its result. A forced kill or a
+shutdown timeout can leave an uncertain receipt, which is never retried automatically.
+Logs rotate at about 1 MB, retaining one prior file. They contain metadata, not task bodies or raw
+subprocess output. `status` distinguishes listener state, LaunchAgent state, relay connectivity,
+route state, last-poll time, blocked pending issues and durable receipt counts. A paired route's
+**live terminal availability remains unverified**. Running is not proof of delivery.
+For foreground diagnosis only, use `listen`; `once` performs one real poll. Stop the service first.
+
+## Pair a ChatGPT chat with a terminal
+
+Tell ChatGPT with GitHub **write access**:
+
+> Connect this chat to route `cmbs-costs`. Create one pairing request in
+> `norman8823/codex-bridge`, authored by my allowlisted account, labeled only `codex-pair`.
+> Use a fresh random single-use code of 16–64 letters/digits/underscores/hyphens and an
+> expiry no more than 15 minutes after issue creation. Give me the code. Do not label it `codex-send`.
+
+The pairing issue body must be a JSON object (no Markdown fences):
+
+```json
+{"route":"cmbs-costs","code":"FRESH_RANDOM_CODE_AT_LEAST_16_CHARS","expires_at":"UTC_ISO_TIMESTAMP"}
+```
+
+Inside the **intended existing interactive Codex session**, say:
+
+> Connect bridge with code CODE. Run `~/codex-bridge/codex-bridge pair CODE`
+> using this session's shell tool, without launching another Codex session.
+
+Codex supplies `CODEX_THREAD_ID` to that shell context. The command prints the selected UUID and
+posts confirmation of the route to the pairing issue, omitting the code, UUID and local paths.
+Check the printed UUID against `/status` if the context is uncertain. **Do not inherit the variable
+into a nested Codex session and treat it as the nested session's identity.** The explicit fallback is:
 
 ```sh
-~/codex-bridge/codex-bridge set-session YOUR-EXISTING-SESSION-UUID
-~/codex-bridge/codex-bridge start
+~/codex-bridge/codex-bridge pair CODE --session UUID_FROM_STATUS
 ```
 
-The command refuses a change while this listener runs or another bridge listener owns
-the new target. It preserves all receipts, so changing sessions never resends old issues.
-No command creates, resumes, or automatically chooses another Codex session.
+This is the operator's manual UUID confirmation and overrides an inherited variable. Missing or
+invalid context never chooses the most recent session. Pairing confirms the user's selection;
+it does not prove that Codex can queue to the session yet, or verify a ChatGPT conversation identity.
+There is no automatic ChatGPT conversation ID. Each chat intentionally chooses a route.
+Two chats can select different routes without changing one global destination.
 
-## ChatGPT dispatch
+Requests must be open issues in the configured private relay, with an allowlisted author and
+latest `codex-pair` label actor. Duplicate matching codes, executable pairing requests, expired,
+changed or previously consumed requests are refused. A durable local claim and `codex-paired`
+marker prevent code reuse. An interrupted claim requires a new request. Failed confirmation comments
+are retried by the listener without repeating the pairing operation. Don't delete the local registry.
 
-Private relay: https://github.com/norman8823/codex-bridge
+## Send approved tasks
 
-Tell ChatGPT, with its GitHub connection enabled:
+Tell ChatGPT:
 
-> Send this to Codex: create one issue in norman8823/codex-bridge with a descriptive
-> title, the complete approved task in its body, and label codex-send. Include requirements,
-> constraints, acceptance criteria and any execution limits. Do not create duplicate issues.
+> Use route `cmbs-costs` for this chat. For each task I approve, create exactly one issue in
+> `norman8823/codex-bridge`, with the approved title, label `codex-send`, and this JSON body:
+> route, a fresh UUID delivery_id, and the complete approved instructions. Do not send unapproved tasks.
 
-ChatGPT must have **write access** through its connected GitHub integration; read-only access
-alone cannot dispatch. Creating an issue with the label in the same request is supported.
-The integration must act as an identity in `authorized_senders` (currently `norman8823`).
-Both the issue author and the most recent actor applying `codex-send` must be allowlisted.
-Comments never dispatch work. Unlabeled issues, PRs, closed issues, other repositories,
-and public repositories are ignored/refused. Never put credentials in instructions.
-Only trusted people should have write access to this relay: authorized issue contents can
-be edited by repository writers. Final instructions are fetched again before submission;
-GitHub edits/revocations are not atomic with a local queue call.
+```json
+{"route":"cmbs-costs","delivery_id":"a85dd9e4-565c-4d58-a4eb-fc9bb77aeaa1","instructions":"Complete approved instructions, constraints and acceptance criteria."}
+```
 
-Harmless test body:
+Generate a **new** delivery UUID for each new task; retain it if an issue creation response is uncertain.
+Title comes from the issue title. Both author and latest `codex-send` label actor must be allowlisted.
+The full current issue is fetched again before submission. Missing/unknown/held routes, duplicate JSON
+fields, duplicate attempted delivery IDs and old-format tasks fail closed. Pending refusals appear in
+`status`; correct a never-attempted pending issue only after checking why it was blocked.
+Pairing issues never execute. Task text is passed as an argument array to `codex queue`, never a shell.
+GitHub edits/revocations are not atomic with a local queue call; restrict relay write access to trusted people.
 
-> Bridge test: acknowledge receipt. Do not modify files, run tests or perform external actions.
+## Changing sessions, `/clear`, and recovery
 
-Delivery does not expand Codex execution permissions. Normal Codex sandbox and approval
-requirements continue to apply. The bridge passes issue text as one argument to
-`codex queue --thread UUID --message TEXT`, using an argument array without a shell.
-It never interprets task text as commands, approves actions, merges, deploys, or calls a paid API.
+**There is no automatic detection of `/clear`, terminal closure, or a session switch.** A remembered
+UUID may still accept a queue message while its old chat is no longer visible. Before `/clear`,
+resuming a different chat, or closing the destination, hold its route:
 
-## Delivery state and recovery
+```sh
+~/codex-bridge/codex-bridge unpair cmbs-costs
+```
 
-| State | Meaning |
+After the change, ask ChatGPT for a **new pairing request/code** and confirm it inside the new session.
+The logical route name stays the same. Pair again the same way to move a route to another terminal.
+Holding a route waits for any in-flight dispatch lock; it cannot recall an already queued message.
+If you already cleared without holding the route, hold it immediately and inspect prior receipts.
+The bridge cannot retroactively prove that a task reached the terminal you are now viewing.
+
+Receipts remain durable across restart and re-pairing. Historical issues #1–3 are never replayed.
+The legacy `session` config key/`set-session` are preserved for compatibility but **never select a
+new task's destination**. Existing config and receipts need no migration.
+
+| State | Meaning / action |
 | --- | --- |
-| Open + codex-send, no delivery label | Pending explicitly approved instruction |
-| codex-dispatching | Durable submission intent; delivery may be in progress |
-| codex-queued | Queue exit 0 and a message identifier were recorded; **not task completion** |
-| codex-failed | Queue command failed or submission could not start; no automatic retry |
-| codex-uncertain | Timeout, interrupted process, or unrecognized response; investigate manually |
+| Pending | No queue attempt; held or invalid envelopes appear in last-poll health |
+| Dispatching | Durable intent before queue invocation; interrupted intent becomes uncertain |
+| Queued | Codex returned a message ID; destination receipt, execution and completion unverified |
+| Failed | Queue failed; route held; no automatic retry |
+| Uncertain | Timeout, interruption or unrecognized response; reconcile manually; route held |
 
-Status labels are additive: `codex-send` and `codex-dispatching` remain as history.
-A final label takes precedence. Local `.runtime/receipts.json` contains the repository,
-issue number, target session, body SHA-256, status, timestamp, queue exit code when available,
-and message ID when confirmed. `.runtime/activity.log` contains metadata only; task bodies
-and subprocess stderr are not logged. The runtime directory and config are excluded from Git.
-Receipt updates use atomic replacement and fsync. Corrupt state stops delivery.
+`no rollout found` is a failure requiring explicit re-pairing and reconciliation. **It is not success
+and is not retried.** Re-pairing never releases an attempted issue or delivery UUID for another attempt.
+For any failed/uncertain/obsolete-session attempt, inspect the original terminal/history and receipt's
+attempted UUID/message ID. Only after establishing that it was not executed may you approve a new
+issue with a new delivery ID referencing the old issue. If uncertain, leave it held. Never delete
+receipts or dispatch labels to force a retry. Even a nonzero exit is not proof of non-delivery.
+GitHub outages preserve local state and tasks; status-label and pairing-confirmation retries do not
+requeue instructions. Corrupt state fails closed.
 
-Each issue is attempted at most once by this installation, including after restart, relabeling,
-or changing the target. A restart converts any local dispatching receipt into uncertain.
-GitHub status updates retry independently without resubmission. A GitHub dispatch marker
-also blocks delivery if local state is lost. Never delete receipts or delivery labels to retry.
+The destination can post an explicit result to its originating issue when the task allows external
+reporting (`gh issue comment NUMBER --repo norman8823/codex-bridge --body-file FILE`). Include outcome,
+summary, changed files, tests and blockers. The listener never infers acknowledgment or completion.
 
-For an uncertain or failed issue, inspect `activity`, the original Codex terminal, and its
-session history. A nonzero queue exit does not justify a blind retry. If you establish that
-the instruction was never delivered, explicitly authorize a **new issue** referencing the
-old issue. If delivery is still uncertain, leave it held. Queue success alone never proves
-that Codex executed or completed the work.
+Uninstall removes only this LaunchAgent and preserves config, routes, receipts and logs. No global
+Codex hooks or settings are modified. For a revert, stop/uninstall before restoring older code;
+never restore an older receipt file or remove historical delivery labels.
 
-File locks prevent duplicate listeners per installation and per target session across
-installations for the same macOS user. This utility is intended for one Mac; do not run
-separate listeners against this relay from other machines. It is not a distributed queue.
-Locks are released by the OS on exit; never delete lock files to force another listener.
-
-## Completion reports
-
-Queued instructions include a completion convention. When the task permits external
-reporting, the existing Codex agent can write a concise Markdown result to a temporary file
-and post it to the originating issue:
+## Validation
 
 ```sh
-gh issue comment ISSUE_NUMBER --repo norman8823/codex-bridge --body-file /tmp/codex-result.md
+python3 -m unittest discover -s tests -v
 ```
 
-Use this content format:
-
-```text
-Outcome: completed | blocked | failed
-Summary: ...
-Files changed: ... (or none)
-Tests and results: ... (or not run, with reason)
-Remaining decisions/blockers: ... (or none)
-```
-
-This reports work explicitly; the listener does not infer completion or scrape/upload session
-history. Tasks that forbid external actions receive their acknowledgement only in the Codex
-terminal. ChatGPT can inspect the issue and comments on a subsequent turn.
-
-## Setup on another installation
-
-Use Python 3.9+, GitHub CLI, and the existing Codex CLI supporting `codex queue`.
-Authenticate with `gh auth login --hostname github.com`. Confirm access using
-`gh repo view norman8823/codex-bridge --json isPrivate,url`.
-If configuring a new repository, create it explicitly private using `gh repo create OWNER/REPO --private`.
-Never substitute an application repository or public repository.
-
-Copy the tracked `config.example.json` to `config.json`, configure your own session UUID,
-repo, authorized GitHub usernames and polling interval, then run:
-
-```sh
-~/codex-bridge/codex-bridge setup-relay
-python3 -m unittest discover -s ~/codex-bridge/tests -v
-```
-
-`setup-relay` verifies the configured existing repository is private and creates missing
-labels. `once` performs a single real polling cycle; use it only when delivery is intended.
-
-## Troubleshooting
-
-- **GitHub unavailable:** run `gh auth status` in your normal terminal, check network and private
-  repository access. Polling resumes automatically after transient GitHub errors. An API failure
-  before submission never launches Codex. GitHub credentials stay in `gh`/macOS Keychain.
-- **Session missing/offline:** inspect the original Codex terminal. The queue command is the authority
-  on reachability. The bridge never substitutes a session. If queue accepts a message but the terminal
-  is offline, queued still does not mean received; check the original terminal before proceeding.
-- **No delivery:** verify the issue is open, has `codex-send`, has no previous delivery markers,
-  has a nonempty body, and its author and label actor are allowlisted. Only full UUID targets are accepted.
-- **Unexpected queue format:** a success without a recognizable message UUID is uncertain. Check
-  the original session before adjusting the parser or authorizing a new issue.
-- **Bridge stops:** malformed state/config or local I/O failures stop the process conservatively.
-  Inspect local files, preserve receipts, fix the cause and restart. An interrupted dispatch is held.
-- **Long stop:** a single queue call has a 45-second timeout; GitHub calls have 30-second timeouts.
-  Let an in-flight polling cycle finish. Ctrl-C requests a clean stop; force-killing creates uncertainty.
-- **Running status:** status probes the OS file lock, not a stale PID file. Runtime details include
-  the listener PID and session. The bridge does not send keystrokes or attach to the Codex terminal.
-
-No launchd service is installed. Closing the dedicated bridge terminal stops polling.
+Tests use fake GitHub/subprocess responses and no paid APIs. See VALIDATION.md for the bounded local
+validation and the distinction between tested code, service operation and real destination receipt.

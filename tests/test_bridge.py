@@ -12,12 +12,14 @@ import bridge
 SESSION = '01a14055-7b04-7483-9c0a-e01f79e7f738'
 MESSAGE = '01a140e2-9b71-74b3-9018-01e4a57de06e'
 OTHER = '01a14055-7b04-7483-9c0a-e01f79e7f739'
+DELIVERY = '01a14055-7b04-7483-9c0a-e01f79e7f740'
 CONFIG = dict(repo='norman8823/codex-bridge', session=SESSION,
               authorized_senders=['norman8823'], poll_seconds=15)
 
 
 def issue():
-    return dict(number=7, title='Example', body='Full instructions: $(touch /tmp/never)\n`false`',
+    return dict(number=7, title='Example', body=json.dumps(dict(route='test-one', delivery_id=DELIVERY,
+                instructions='Full instructions: $(touch /tmp/never)\n`false`')),
                 state='open', user={'login': 'norman8823'},
                 repository_url='https://api.github.com/repos/norman8823/codex-bridge',
                 labels=[{'name': 'codex-send'}])
@@ -57,6 +59,8 @@ class DeliveryTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.gh = FakeGitHub()
+        bridge.atomic_json(self.root / '.runtime/routes.json', dict(routes={
+            'test-one': dict(repo=CONFIG['repo'], session=SESSION, status='paired')}, pairs={}))
         self.b = bridge.Bridge(copy.deepcopy(CONFIG), self.root, self.gh)
         self.runner = patch('bridge.subprocess.run').start()
         self.addCleanup(patch.stopall)
@@ -69,7 +73,7 @@ class DeliveryTests(unittest.TestCase):
         self.b.poll()
         args = self.runner.call_args.args[0]
         self.assertEqual(args[:5], ['codex', 'queue', '--thread', SESSION, '--message'])
-        self.assertIn(self.gh.item['body'], args[5])
+        self.assertIn(json.loads(self.gh.item['body'])['instructions'], args[5])
         self.assertNotIn('shell', self.runner.call_args.kwargs)
         self.assertEqual(self.receipt()['message_id'], MESSAGE)
         self.assertEqual(self.receipt()['exit_code'], 0)
